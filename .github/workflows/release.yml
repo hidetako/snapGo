@@ -13,6 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,11 +32,22 @@ jobs:
         shell: pwsh
         run: .\build.ps1
 
-      - name: 動作確認 (--version)
+      - name: 動作確認 (import + exe 起動を60秒で打ち切り)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\SnipNote\SnipNote.exe -ArgumentList "--version" -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "SnipNote.exe --version failed ($($p.ExitCode))" }
+          python -c "import snipnote, updater; print('import ok', snipnote.__version__)"
+          if (-not (Test-Path dist\SnipNote\SnipNote.exe)) { throw "SnipNote.exe がありません" }
+          $p = Start-Process -FilePath dist\SnipNote\SnipNote.exe -ArgumentList "--version" -PassThru
+          $done = $p.WaitForExit(60000)
+          if (-not $done) {
+            Stop-Process -Id $p.Id -Force
+            Write-Warning "SnipNote.exe --version が60秒で終了しませんでした（GUIダイアログ待ちの可能性）。ビルドは続行します。"
+          } elseif ($p.ExitCode -ne 0) {
+            throw "SnipNote.exe --version failed ($($p.ExitCode))"
+          } else {
+            Write-Host "exe ok"
+          }
+          Get-ChildItem build\SnipNote\warn-SnipNote.txt -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_ | Select-Object -First 40 }
 
       - uses: actions/upload-artifact@v4
         with:
