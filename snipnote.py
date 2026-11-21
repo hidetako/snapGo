@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnipNote"
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
