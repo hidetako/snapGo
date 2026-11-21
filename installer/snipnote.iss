@@ -6,7 +6,7 @@
 #define AppName "SnipNote"
 #define AppExe "SnipNote.exe"
 #define AppPublisher "SnipNote"
-#define AppURL "https://github.com/あなたのGitHubユーザー名/snipnote"
+#define AppURL "https://github.com/hidetako/snipnote"
 
 [Setup]
 AppId={{6F1B7C1E-6D1B-4E7A-9C2B-5D2F3A8B9E01}
@@ -76,5 +76,3 @@ begin
   Sleep(800);
   Result := '';
 end;
-
-

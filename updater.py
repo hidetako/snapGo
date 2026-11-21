@@ -1,7 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
 """
-SnipNote 閾ｪ蜍墓峩譁ｰ
-GitHub Releases 縺ｮ譛譁ｰ迚医ｒ遒ｺ隱阪＠縲√う繝ｳ繧ｹ繝医・繝ｩ繝ｼ(SnipNote-Setup-x.y.z.exe)繧・繝繧ｦ繝ｳ繝ｭ繝ｼ繝・竊・SHA256SUMS.txt 縺ｧ讀懆ｨｼ 竊・繧ｵ繧､繝ｬ繝ｳ繝亥ｮ溯｡後＠縺ｦ閾ｪ蛻・ｒ譖ｴ譁ｰ縺吶ｋ縲・"""
+SnipNote 自動更新
+GitHub Releases の最新版を確認し、インストーラー(SnipNote-Setup-x.y.z.exe)を
+ダウンロード → SHA256SUMS.txt で検証 → サイレント実行して自分を更新する。
+"""
 import hashlib
 import json
 import os
@@ -13,15 +15,17 @@ import urllib.request
 
 from PyQt5.QtCore import QObject, QThread, QTimer, QSettings, pyqtSignal
 
-# 笘・閾ｪ蛻・・繝ｪ繝昴ず繝医Μ (owner/repo) 縺ｫ螟画峩縺吶ｋ
-GITHUB_REPO = "あなたのGitHubユーザー名/snipnote"
+# ★ 自分のリポジトリ (owner/repo) に変更する
+GITHUB_REPO = "hidetako/snipnote"
 
 API_LATEST = "https://api.github.com/repos/%s/releases/latest"
 ASSET_RE = re.compile(r"^SnipNote-Setup-(\d+\.\d+\.\d+)\.exe$")
 SUMS_NAME = "SHA256SUMS.txt"
 USER_AGENT = "SnipNote-Updater"
-CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000   # 24譎る俣縺斐→
-FIRST_CHECK_DELAY_MS = 30 * 1000           # 襍ｷ蜍・0遘貞ｾ・RETRY_BUSY_MS = 60 * 1000                  # 繧ｭ繝｣繝励メ繝｣荳ｭ縺ｪ繧・蛻・ｾ後↓蜀崎ｩｦ陦・
+CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000   # 24時間ごと
+FIRST_CHECK_DELAY_MS = 30 * 1000           # 起動30秒後
+RETRY_BUSY_MS = 60 * 1000                  # キャプチャ中なら1分後に再試行
+
 
 def parse_version(text):
     nums = [int(x) for x in re.findall(r"\d+", text or "")[:3]]
@@ -103,7 +107,7 @@ def download_dir():
 
 
 def launch_installer(path):
-    """Inno Setup 繧偵し繧､繝ｬ繝ｳ繝亥ｮ溯｡後ゅう繝ｳ繧ｹ繝医・繝ｩ繝ｼ蛛ｴ縺悟ｮ御ｺ・ｾ後↓ SnipNote 繧貞・襍ｷ蜍輔☆繧九・""
+    """Inno Setup をサイレント実行。インストーラー側が完了後に SnipNote を再起動する。"""
     args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CLOSEAPPLICATIONS"]
     flags = 0
     if sys.platform == "win32":
@@ -112,9 +116,10 @@ def launch_installer(path):
 
 
 class UpdateWorker(QThread):
-    """繝舌ャ繧ｯ繧ｰ繝ｩ繧ｦ繝ｳ繝峨〒遒ｺ隱・(+繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨・讀懆ｨｼ)"""
+    """バックグラウンドで確認 (+ダウンロード・検証)"""
     no_update = pyqtSignal()
-    found = pyqtSignal(object)            # 譁ｰ迚医≠繧奇ｼ医う繝ｳ繧ｹ繝医・繝ｫ荳榊庄 or 繝繧ｦ繝ｳ繝ｭ繝ｼ繝臥┌蜉ｹ・・    ready = pyqtSignal(object, str)       # 譁ｰ迚医≠繧翫∵､懆ｨｼ貂医∩繧､繝ｳ繧ｹ繝医・繝ｩ繝ｼ縺ｮ繝代せ
+    found = pyqtSignal(object)            # 新版あり（インストール不可 or ダウンロード無効）
+    ready = pyqtSignal(object, str)       # 新版あり、検証済みインストーラーのパス
     failed = pyqtSignal(str)
 
     def __init__(self, current_version, repo=GITHUB_REPO, do_download=True, api_base=None):
@@ -139,15 +144,18 @@ class UpdateWorker(QThread):
             actual = sha256_file(dest)
             if actual != info.sha256:
                 os.remove(dest)
-                raise ValueError("SHA256 縺御ｸ閾ｴ縺励∪縺帙ｓ (譛溷ｾ・%s窶ｦ / 螳滄圀 %s窶ｦ)" % (info.sha256[:12], actual[:12]))
+                raise ValueError("SHA256 が一致しません (期待 %s… / 実際 %s…)" % (info.sha256[:12], actual[:12]))
             self.ready.emit(info, dest)
-        except Exception as ex:  # 繝阪ャ繝医Ρ繝ｼ繧ｯ荳埼壹↑縺ｩ縺ｯ騾夂衍縺ｮ縺ｿ
+        except Exception as ex:  # ネットワーク不通などは通知のみ
             self.failed.emit("%s: %s" % (type(ex).__name__, ex))
 
 
 class AutoUpdater(QObject):
     """
-    繧｢繝励Μ蛛ｴ縺ｮ蜿ｸ莉､蝪斐・    - 蟶ｸ鬧先凾: 襍ｷ蜍・0遘貞ｾ後→24譎る俣縺斐→縺ｫ遒ｺ隱・    - 讀懆ｨｼ貂医∩繧､繝ｳ繧ｹ繝医・繝ｩ繝ｼ縺檎畑諢上〒縺阪◆繧峨√く繝｣繝励メ繝｣荳ｭ縺ｧ縺ｪ縺代ｌ縺ｰ螳溯｡後＠縺ｦ邨ゆｺ・    """
+    アプリ側の司令塔。
+    - 常駐時: 起動30秒後と24時間ごとに確認
+    - 検証済みインストーラーが用意できたら、キャプチャ中でなければ実行して終了
+    """
     status = pyqtSignal(str, str, bool)   # (title, message, is_warning)
     quit_requested = pyqtSignal()
 
@@ -165,7 +173,7 @@ class AutoUpdater(QObject):
         self.timer.setInterval(CHECK_INTERVAL_MS)
         self.timer.timeout.connect(lambda: self.check(manual=False))
 
-    # ---- 險ｭ螳・----
+    # ---- 設定 ----
     @property
     def enabled(self):
         return self.settings.value("auto_update", True, type=bool)
@@ -183,7 +191,7 @@ class AutoUpdater(QObject):
             QTimer.singleShot(FIRST_CHECK_DELAY_MS, lambda: self.check(manual=False))
             self.timer.start()
 
-    # ---- 遒ｺ隱・----
+    # ---- 確認 ----
     def check(self, manual=False):
         if self.worker is not None and self.worker.isRunning():
             return
@@ -197,12 +205,12 @@ class AutoUpdater(QObject):
 
     def _on_none(self):
         if self.manual:
-            self.status.emit("SnipNote", "譛譁ｰ迚医〒縺・(v%s)" % self.current, False)
+            self.status.emit("SnipNote", "最新版です (v%s)" % self.current, False)
 
     def _on_found(self, info):
         self.last_found = info
-        how = "繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨・繝ｼ繧ｸ繧帝幕縺上↓縺ｯ繧ｯ繝ｪ繝・け" if not is_frozen() else "繧､繝ｳ繧ｹ繝医・繝ｩ繝ｼ縺瑚ｦ九▽縺九ｉ縺ｪ縺・◆繧∵焔蜍墓峩譁ｰ縺励※縺上□縺輔＞"
-        self.status.emit("SnipNote 譁ｰ繝舌・繧ｸ繝ｧ繝ｳ v%s" % info.version, how, False)
+        how = "ダウンロードページを開くにはクリック" if not is_frozen() else "インストーラーが見つからないため手動更新してください"
+        self.status.emit("SnipNote 新バージョン v%s" % info.version, how, False)
 
     def _on_ready(self, info, path):
         self.pending = (info, path)
@@ -210,7 +218,7 @@ class AutoUpdater(QObject):
 
     def _on_failed(self, msg):
         if self.manual:
-            self.status.emit("SnipNote 譖ｴ譁ｰ遒ｺ隱阪↓螟ｱ謨・, msg, True)
+            self.status.emit("SnipNote 更新確認に失敗", msg, True)
 
     def try_install(self):
         if not self.pending:
@@ -220,14 +228,14 @@ class AutoUpdater(QObject):
             return
         info, path = self.pending
         self.pending = None
-        self.status.emit("SnipNote", "v%s 縺ｫ譖ｴ譁ｰ縺励∪縺吶よ焚遘貞ｾ後↓蜀崎ｵｷ蜍輔＠縺ｾ縺吶・ % info.version, False)
+        self.status.emit("SnipNote", "v%s に更新します。数秒後に再起動します。" % info.version, False)
         QTimer.singleShot(3000, lambda: self._run(path))
 
     def _run(self, path):
         try:
             launch_installer(path)
         except Exception as ex:
-            self.status.emit("SnipNote 譖ｴ譁ｰ縺ｫ螟ｱ謨・, str(ex), True)
+            self.status.emit("SnipNote 更新に失敗", str(ex), True)
             return
         self.quit_requested.emit()
 
@@ -235,5 +243,3 @@ class AutoUpdater(QObject):
         if self.last_found and self.last_found.html_url:
             import webbrowser
             webbrowser.open(self.last_found.html_url)
-
-

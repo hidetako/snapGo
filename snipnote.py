@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 SnipNote - Windows 画面キャプチャ + その場で書き込み（注釈）ツール
