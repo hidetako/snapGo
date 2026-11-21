@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnipNote"
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -871,6 +871,9 @@ class SnipNote:
         b = QAction("保存フォルダを開く", menu)
         b.triggered.connect(lambda: os.startfile(self.save_dir) if hasattr(os, "startfile") else None)
         menu.addAction(b)
+        lg = QAction("ログを開く", menu)
+        lg.triggered.connect(lambda: os.startfile(updater.log_path()) if hasattr(os, "startfile") else None)
+        menu.addAction(lg)
         menu.addSeparator()
         v = QAction("バージョン %s%s" % (__version__, "" if updater.is_frozen() else " (ソース実行)"), menu)
         v.setEnabled(False)
@@ -898,7 +901,9 @@ class SnipNote:
                 self.hk = Hotkey(self.app, self.hotkey, self.capture)
                 self.app.aboutToQuit.connect(self.hk.release)
                 self.tray.setToolTip("%s - %s でキャプチャ (%s)" % (APP_NAME, self.hotkey.upper(), self.hk.method))
+                updater.log.info("hotkey %s via %s", self.hotkey, self.hk.method)
             except Exception as ex:
+                updater.log.warning("hotkey failed: %s", ex)
                 self.tray.showMessage(APP_NAME, str(ex), QSystemTrayIcon.Warning, 8000)
             if self.hotkey == "printscreen" and windows_prtsc_snipping_enabled():
                 self.tray.showMessage(
@@ -943,7 +948,23 @@ def main():
                     help="保存先フォルダ")
     ap.add_argument("--no-update", action="store_true", help="自動更新の確認を行わない")
     ap.add_argument("--version", action="version", version="%s %s" % (APP_NAME, __version__))
+    ap.add_argument("--check-update", action="store_true", help="更新確認の結果を表示して終了（診断用）")
     args = ap.parse_args()
+
+    updater.setup_logging()
+    updater.log.info("start v%s frozen=%s args=%s", __version__, updater.is_frozen(), sys.argv[1:])
+
+    if args.check_update:
+        try:
+            info = updater.fetch_latest()
+            msg = "current=%s latest=%s asset=%s sha256=%s repo=%s" % (
+                __version__, info.version, info.asset_name, (info.sha256 or "")[:12], updater.GITHUB_REPO)
+        except Exception as ex:
+            msg = "check failed: %s: %s (repo=%s)" % (type(ex).__name__, ex, updater.GITHUB_REPO)
+        updater.log.info(msg)
+        if sys.stdout:
+            print(msg)
+        return
 
     QApplication.setAttribute(Qt.AA_DisableHighDpiScaling, True)
     app = QApplication(sys.argv)

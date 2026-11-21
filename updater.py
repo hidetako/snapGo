@@ -6,6 +6,7 @@ GitHub Releases の最新版を確認し、インストーラー(SnipNote-Setup-
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -25,6 +26,27 @@ USER_AGENT = "SnipNote-Updater"
 CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000   # 24時間ごと
 FIRST_CHECK_DELAY_MS = 30 * 1000           # 起動30秒後
 RETRY_BUSY_MS = 60 * 1000                  # キャプチャ中なら1分後に再試行
+
+
+log = logging.getLogger("snipnote")
+
+
+def log_path():
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    d = os.path.join(base, "SnipNote")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "snipnote.log")
+
+
+def setup_logging():
+    """%LOCALAPPDATA%\\SnipNote\\snipnote.log に動作記録を残す（更新トラブルの切り分け用）"""
+    try:
+        handler = logging.FileHandler(log_path(), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+    except Exception:
+        pass
 
 
 def parse_version(text):
@@ -131,7 +153,10 @@ class UpdateWorker(QThread):
 
     def run(self):
         try:
+            log.info("update check: current=%s repo=%s", self.current, self.repo)
             info = fetch_latest(self.repo, self.api_base)
+            log.info("latest=%s asset=%s sha=%s", info.version, info.asset_name,
+                     (info.sha256 or "")[:12])
             if parse_version(info.version) <= parse_version(self.current):
                 self.no_update.emit()
                 return
@@ -145,8 +170,10 @@ class UpdateWorker(QThread):
             if actual != info.sha256:
                 os.remove(dest)
                 raise ValueError("SHA256 が一致しません (期待 %s… / 実際 %s…)" % (info.sha256[:12], actual[:12]))
+            log.info("installer ready: %s", dest)
             self.ready.emit(info, dest)
         except Exception as ex:  # ネットワーク不通などは通知のみ
+            log.warning("update check failed: %s: %s", type(ex).__name__, ex)
             self.failed.emit("%s: %s" % (type(ex).__name__, ex))
 
 
@@ -233,6 +260,7 @@ class AutoUpdater(QObject):
 
     def _run(self, path):
         try:
+            log.info("launching installer: %s", path)
             launch_installer(path)
         except Exception as ex:
             self.status.emit("SnipNote 更新に失敗", str(ex), True)
