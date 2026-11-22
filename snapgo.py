@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnapGo"
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -680,15 +680,25 @@ class Overlay(QWidget):
         self.update()
 
     def save_self_capture(self):
-        """資料用: オーバーレイ表示そのもの（暗転・選択枠・ツールバー込み）を保存"""
+        """資料用: いま画面に表示されている状態（暗転・選択枠・ツールバー込み）を保存"""
         os.makedirs(self.save_dir, exist_ok=True)
         name = datetime.datetime.now().strftime("snapgo-overlay_%Y%m%d_%H%M%S.png")
         path = os.path.join(self.save_dir, name)
         self.flash_text = ""
         self.repaint()
-        ok = self.grab().save(path)
+        QApplication.processEvents()
+        # 1) 画面そのものを取り込む（表示どおりに写る）
+        try:
+            pm, _vg = grab_virtual_desktop()
+        except Exception:
+            pm = None
+        # 2) 取れなかった場合はウィジェットを描画して保存
+        if pm is None or pm.isNull():
+            pm = self.grab()
+        ok = pm.save(path)
         self.flash("画面を保存しました: %s" % path if ok else "保存に失敗しました")
-        updater.log.info("self capture %s -> %s", "ok" if ok else "failed", path)
+        updater.log.info("self capture %s (%dx%d) -> %s", "ok" if ok else "failed",
+                         pm.width(), pm.height(), path)
 
     def default_path(self):
         os.makedirs(self.save_dir, exist_ok=True)
