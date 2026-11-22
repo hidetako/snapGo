@@ -56,8 +56,7 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Parameters: "--tr
 [Run]
 ; 通常インストール: 完了画面のチェックボックスで起動
 Filename: "{app}\{#AppExe}"; Parameters: "--tray"; Description: "{#AppName} を起動する"; Flags: nowait postinstall skipifsilent
-; サイレント(自動更新)時: 無条件で再起動
-Filename: "{app}\{#AppExe}"; Parameters: "--tray"; Flags: nowait; Check: WizardSilent
+; サイレント(自動更新)時の再起動は、更新前の SnapGo が用意する apply_update.cmd が行う
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillSnapGo"

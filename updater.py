@@ -128,13 +128,38 @@ def download_dir():
     return d
 
 
+def start_menu_shortcut():
+    """インストーラーが作るスタートメニューのショートカット（--tray 付き）"""
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    lnk = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "SnapGo", "SnapGo.lnk")
+    return lnk if os.path.exists(lnk) else None
+
+
 def launch_installer(path):
-    """Inno Setup をサイレント実行。インストーラー側が完了後に SnapGo を再起動する。"""
-    args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CLOSEAPPLICATIONS"]
+    """
+    Inno Setup をサイレント実行し、終了後に SnapGo を起動し直す。
+    インストーラーの [Run] から起動したプロセスでは PrintScreen が届かない事例があったため、
+    再起動は別の cmd から、スタートメニューと同じ経路（ショートカット経由）で行う。
+    """
+    exe = sys.executable
+    lnk = start_menu_shortcut()
+    if lnk:
+        restart = 'start "" explorer.exe "%s"' % lnk
+    else:
+        restart = 'start "" "%s" --tray' % exe
+    script = os.path.join(download_dir(), "apply_update.cmd")
+    with open(script, "w", encoding="cp932", errors="replace") as f:
+        f.write("@echo off\r\n")
+        f.write('"%s" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS\r\n' % path)
+        f.write("timeout /t 2 /nobreak >nul\r\n")
+        f.write(restart + "\r\n")
     flags = 0
     if sys.platform == "win32":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(args, close_fds=True, creationflags=flags)
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    log.info("apply script: %s (restart via %s)", script, "shortcut" if lnk else "exe")
+    subprocess.Popen(["cmd", "/c", script], close_fds=True, creationflags=flags)
 
 
 class UpdateWorker(QThread):

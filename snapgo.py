@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnapGo"
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -773,6 +773,7 @@ class HotkeyFilter(QAbstractNativeEventFilter):
             import ctypes.wintypes
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == self.WM_HOTKEY:
+                updater.log.info("WM_HOTKEY received")
                 QTimer.singleShot(0, self.callback)
                 return True, 0
         return False, 0
@@ -839,6 +840,7 @@ class Hotkey:
                     if (down(0x11) == need_ctrl and down(0x12) == need_alt and
                             down(0x10) == need_shift and
                             (down(0x5B) or down(0x5C)) == need_win):
+                        updater.log.info("hook: hotkey pressed")
                         QTimer.singleShot(0, self.callback)
                         return 1  # 他アプリ(OneDrive等)へ渡さない
             return u.CallNextHookEx(self.hook, n_code, w_param, l_param)
@@ -958,8 +960,10 @@ class SnapGo:
 
     def capture(self):
         if self.overlay is not None:
+            updater.log.info("capture ignored: overlay already open")
             return
         shot, vg = grab_virtual_desktop()
+        updater.log.info("capture: %dx%d", vg.width(), vg.height())
         self.overlay = Overlay(shot, vg, self.save_dir, self._done)
         self.overlay.destroyed.connect(self._cleared)
         self.overlay.show()
