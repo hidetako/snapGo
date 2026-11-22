@@ -16,6 +16,7 @@ SnapGo - Windows 画面キャプチャ + その場で書き込み（注釈）ツ
   Ctrl+S              PNG保存(＋コピー)して閉じる
   Ctrl+Shift+S        保存先を指定して保存
   Esc / 右クリック    キャンセル
+  F12                 この画面自体（選択枠・ツールバー込み）を PNG 保存（資料用）
 """
 import sys
 import os
@@ -35,7 +36,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnapGo"
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -390,6 +391,7 @@ class Overlay(QWidget):
         self.counter = 1
         self.text_input = None
         self.mouse_pos = QPoint(-1, -1)
+        self.flash_text = ""      # 画面下部に一時表示するメッセージ
 
         self.toolbar = Toolbar(self)
         self.toolbar.sync()
@@ -572,7 +574,9 @@ class Overlay(QWidget):
         k, m = e.key(), e.modifiers()
         ctrl = bool(m & Qt.ControlModifier)
         shift = bool(m & Qt.ShiftModifier)
-        if k == Qt.Key_Escape:
+        if k == Qt.Key_F12:
+            self.save_self_capture()
+        elif k == Qt.Key_Escape:
             self.cancel()
         elif k in (Qt.Key_Return, Qt.Key_Enter):
             if self.phase == "edit":
@@ -642,6 +646,16 @@ class Overlay(QWidget):
             p.fillRect(QRect(20, 20, 420, 26), QColor(0, 0, 0, 160))
             p.drawText(QRect(20, 20, 420, 26), Qt.AlignCenter,
                        "ドラッグで範囲選択 / クリックで画面全体 / Esc でキャンセル")
+        if self.flash_text:
+            f = QFont()
+            f.setPixelSize(14)
+            p.setFont(f)
+            fm = QFontMetrics(f)
+            tw = fm.horizontalAdvance(self.flash_text) + 24
+            r = QRect((self.width_px() - tw) // 2, self.height_px() - 60, tw, 30)
+            p.fillRect(r, QColor(0, 0, 0, 190))
+            p.setPen(Qt.white)
+            p.drawText(r, Qt.AlignCenter, self.flash_text)
         p.end()
 
     # ---- 出力 ----
@@ -655,6 +669,26 @@ class Overlay(QWidget):
             draw_shape(p, s, self.shot)
         p.end()
         return out
+
+    def flash(self, text, msec=2500):
+        self.flash_text = text
+        self.update()
+        QTimer.singleShot(msec, self._clear_flash)
+
+    def _clear_flash(self):
+        self.flash_text = ""
+        self.update()
+
+    def save_self_capture(self):
+        """資料用: オーバーレイ表示そのもの（暗転・選択枠・ツールバー込み）を保存"""
+        os.makedirs(self.save_dir, exist_ok=True)
+        name = datetime.datetime.now().strftime("snapgo-overlay_%Y%m%d_%H%M%S.png")
+        path = os.path.join(self.save_dir, name)
+        self.flash_text = ""
+        self.repaint()
+        ok = self.grab().save(path)
+        self.flash("画面を保存しました: %s" % path if ok else "保存に失敗しました")
+        updater.log.info("self capture %s -> %s", "ok" if ok else "failed", path)
 
     def default_path(self):
         os.makedirs(self.save_dir, exist_ok=True)

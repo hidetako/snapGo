@@ -138,6 +138,7 @@ Set-ItemProperty -Path 'HKCU:\Control Panel\Keyboard' -Name PrintScreenKeyForSni
 | Ctrl+S | PNG 保存（＋コピー）して閉じる |
 | Ctrl+Shift+S | 保存先を指定して保存 |
 | Esc / 右クリック | キャンセル |
+| F12 | 表示中の画面そのもの（選択枠・ツールバー込み）を PNG 保存。紹介用スクリーンショット向け |
 
 * 文字ツール: クリック→入力→Enter で確定、Esc で取り消し。
 * モザイク: 患者名・ID など個人情報を隠す用途を想定。元画像を粗くするので復元不可。
