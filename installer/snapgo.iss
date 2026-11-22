@@ -1,12 +1,12 @@
-﻿; SnipNote - Inno Setup 6 script
-; build.ps1 から  ISCC.exe /DAppVersion=x.y.z installer\snipnote.iss  で呼ばれる
+﻿; SnapGo - Inno Setup 6 script
+; build.ps1 から  ISCC.exe /DAppVersion=x.y.z installer\snapgo.iss  で呼ばれる
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
-#define AppName "SnipNote"
-#define AppExe "SnipNote.exe"
-#define AppPublisher "SnipNote"
-#define AppURL "https://github.com/hidetako/snipnote"
+#define AppName "SnapGo"
+#define AppExe "SnapGo.exe"
+#define AppPublisher "SnapGo"
+#define AppURL "https://github.com/hidetako/snapgo"
 
 [Setup]
 AppId={{6F1B7C1E-6D1B-4E7A-9C2B-5D2F3A8B9E01}
@@ -24,7 +24,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
 OutputBaseFilename={#AppName}-Setup-{#AppVersion}
-SetupIconFile=..\assets\snipnote.ico
+SetupIconFile=..\assets\snapgo.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/max
 SolidCompression=yes
@@ -44,7 +44,7 @@ Name: "startup"; Description: "サインイン時に自動起動する（PrintSc
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\SnipNote\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\SnapGo\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; Parameters: "--tray"; WorkingDir: "{app}"
@@ -60,13 +60,13 @@ Filename: "{app}\{#AppExe}"; Parameters: "--tray"; Description: "{#AppName} を�
 Filename: "{app}\{#AppExe}"; Parameters: "--tray"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillSnipNote"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillSnapGo"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-// 更新・再インストール時に常駐中の SnipNote を終了させる
+// 更新・再インストール時に常駐中の SnapGo を終了させる
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;

@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """
-SnipNote 自動更新
-GitHub Releases の最新版を確認し、インストーラー(SnipNote-Setup-x.y.z.exe)を
+SnapGo 自動更新
+GitHub Releases の最新版を確認し、インストーラー(SnapGo-Setup-x.y.z.exe)を
 ダウンロード → SHA256SUMS.txt で検証 → サイレント実行して自分を更新する。
 """
 import hashlib
@@ -17,29 +17,29 @@ import urllib.request
 from PyQt5.QtCore import QObject, QThread, QTimer, QSettings, pyqtSignal
 
 # ★ 自分のリポジトリ (owner/repo) に変更する
-GITHUB_REPO = "hidetako/snipnote"
+GITHUB_REPO = "hidetako/snapgo"
 
 API_LATEST = "https://api.github.com/repos/%s/releases/latest"
-ASSET_RE = re.compile(r"^SnipNote-Setup-(\d+\.\d+\.\d+)\.exe$")
+ASSET_RE = re.compile(r"^SnapGo-Setup-(\d+\.\d+\.\d+)\.exe$")
 SUMS_NAME = "SHA256SUMS.txt"
-USER_AGENT = "SnipNote-Updater"
+USER_AGENT = "SnapGo-Updater"
 CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000   # 24時間ごと
 FIRST_CHECK_DELAY_MS = 30 * 1000           # 起動30秒後
 RETRY_BUSY_MS = 60 * 1000                  # キャプチャ中なら1分後に再試行
 
 
-log = logging.getLogger("snipnote")
+log = logging.getLogger("snapgo")
 
 
 def log_path():
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    d = os.path.join(base, "SnipNote")
+    d = os.path.join(base, "SnapGo")
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "snipnote.log")
+    return os.path.join(d, "snapgo.log")
 
 
 def setup_logging():
-    """%LOCALAPPDATA%\\SnipNote\\snipnote.log に動作記録を残す（更新トラブルの切り分け用）"""
+    """%LOCALAPPDATA%\\SnapGo\\snapgo.log に動作記録を残す（更新トラブルの切り分け用）"""
     try:
         handler = logging.FileHandler(log_path(), encoding="utf-8")
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -123,13 +123,13 @@ def download(url, dest):
 
 
 def download_dir():
-    d = os.path.join(tempfile.gettempdir(), "SnipNoteUpdate")
+    d = os.path.join(tempfile.gettempdir(), "SnapGoUpdate")
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def launch_installer(path):
-    """Inno Setup をサイレント実行。インストーラー側が完了後に SnipNote を再起動する。"""
+    """Inno Setup をサイレント実行。インストーラー側が完了後に SnapGo を再起動する。"""
     args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CLOSEAPPLICATIONS"]
     flags = 0
     if sys.platform == "win32":
@@ -191,7 +191,7 @@ class AutoUpdater(QObject):
         self.current = current_version
         self.is_busy = is_busy
         self.repo = repo
-        self.settings = QSettings("SnipNote", "SnipNote")
+        self.settings = QSettings("SnapGo", "SnapGo")
         self.worker = None
         self.pending = None   # (info, path)
         self.manual = False
@@ -232,12 +232,12 @@ class AutoUpdater(QObject):
 
     def _on_none(self):
         if self.manual:
-            self.status.emit("SnipNote", "最新版です (v%s)" % self.current, False)
+            self.status.emit("SnapGo", "最新版です (v%s)" % self.current, False)
 
     def _on_found(self, info):
         self.last_found = info
         how = "ダウンロードページを開くにはクリック" if not is_frozen() else "インストーラーが見つからないため手動更新してください"
-        self.status.emit("SnipNote 新バージョン v%s" % info.version, how, False)
+        self.status.emit("SnapGo 新バージョン v%s" % info.version, how, False)
 
     def _on_ready(self, info, path):
         self.pending = (info, path)
@@ -245,7 +245,7 @@ class AutoUpdater(QObject):
 
     def _on_failed(self, msg):
         if self.manual:
-            self.status.emit("SnipNote 更新確認に失敗", msg, True)
+            self.status.emit("SnapGo 更新確認に失敗", msg, True)
 
     def try_install(self):
         if not self.pending:
@@ -255,7 +255,7 @@ class AutoUpdater(QObject):
             return
         info, path = self.pending
         self.pending = None
-        self.status.emit("SnipNote", "v%s に更新します。数秒後に再起動します。" % info.version, False)
+        self.status.emit("SnapGo", "v%s に更新します。数秒後に再起動します。" % info.version, False)
         QTimer.singleShot(3000, lambda: self._run(path))
 
     def _run(self, path):
@@ -263,7 +263,7 @@ class AutoUpdater(QObject):
             log.info("launching installer: %s", path)
             launch_installer(path)
         except Exception as ex:
-            self.status.emit("SnipNote 更新に失敗", str(ex), True)
+            self.status.emit("SnapGo 更新に失敗", str(ex), True)
             return
         self.quit_requested.emit()
 

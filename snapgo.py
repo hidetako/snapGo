@@ -1,11 +1,11 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SnipNote - Windows 画面キャプチャ + その場で書き込み（注釈）ツール
+SnapGo - Windows 画面キャプチャ + その場で書き込み（注釈）ツール
 
-  python snipnote.py              1回だけキャプチャして終了（ショートカット起動向け）
-  python snipnote.py --tray       タスクトレイに常駐し、PrintScreen キーで起動
-  python snipnote.py --tray --hotkey ctrl+shift+a   ホットキーを変更
+  python snapgo.py              1回だけキャプチャして終了（ショートカット起動向け）
+  python snapgo.py --tray       タスクトレイに常駐し、PrintScreen キーで起動
+  python snapgo.py --tray --hotkey ctrl+shift+a   ホットキーを変更
 
 操作:
   ドラッグ            範囲選択（クリックだけ → そのモニター全体）
@@ -34,8 +34,8 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QLineEdit, QFileDialog, QSystemTrayIcon, QMenu,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
-APP_NAME = "SnipNote"
-__version__ = "1.1.2"
+APP_NAME = "SnapGo"
+__version__ = "1.2.0"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -841,7 +841,7 @@ def make_icon():
     return QIcon(pm)
 
 
-class SnipNote:
+class SnapGo:
     def __init__(self, app, save_dir, tray=False, hotkey=DEFAULT_HOTKEY, auto_update=True):
         self.app = app
         self.save_dir = save_dir
@@ -972,7 +972,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     app.setApplicationVersion(__version__)
-    sn = SnipNote(app, args.dir, tray=args.tray, hotkey=args.hotkey, auto_update=not args.no_update)
+    sn = SnapGo(app, args.dir, tray=args.tray, hotkey=args.hotkey, auto_update=not args.no_update)
     if not args.tray:
         QTimer.singleShot(50, sn.capture)
     sys.exit(app.exec_())

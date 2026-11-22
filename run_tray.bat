@@ -1,4 +1,4 @@
 @echo off
-rem SnipNote: stay in system tray, PrintScreen to capture
+rem SnapGo: stay in system tray, PrintScreen to capture
 cd /d %~dp0
-start "" pythonw snipnote.py --tray
+start "" pythonw snapgo.py --tray
