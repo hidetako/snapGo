@@ -26,7 +26,7 @@ import argparse
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
 
 from PyQt5.QtCore import (Qt, QRect, QPoint, QPointF, QRectF, QLineF, QTimer,
-                          QAbstractNativeEventFilter, pyqtSignal)
+                          QAbstractNativeEventFilter, pyqtSignal, QLockFile)
 from PyQt5.QtGui import (QPixmap, QPainter, QPen, QColor, QBrush, QFont,
                          QGuiApplication, QIcon, QPainterPath, QPolygonF,
                          QFontMetrics, QRegion)
@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnapGo"
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -924,6 +924,10 @@ class SnapGo:
         v = QAction("バージョン %s%s" % (__version__, "" if updater.is_frozen() else " (ソース実行)"), menu)
         v.setEnabled(False)
         menu.addAction(v)
+        self.state_action = QAction("状態: 待機中", menu)
+        self.state_action.setEnabled(False)
+        menu.addAction(self.state_action)
+        self.updater.state.connect(lambda t: self.state_action.setText("状態: " + t))
         c = QAction("今すぐ更新を確認", menu)
         c.triggered.connect(lambda: self.updater.check(manual=True))
         menu.addAction(c)
@@ -1020,7 +1024,18 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     app.setApplicationVersion(__version__)
+
+    # 常駐は 1 つだけ（更新後の再起動が二重に走っても 2 つ目は即終了）
+    lock = None
+    if args.tray:
+        lock = QLockFile(os.path.join(os.path.dirname(updater.log_path()), "instance.lock"))
+        lock.setStaleLockTime(0)
+        if not lock.tryLock(200):
+            updater.log.info("another instance is running; exiting")
+            return
+
     sn = SnapGo(app, args.dir, tray=args.tray, hotkey=args.hotkey, auto_update=not args.no_update)
+    app._instance_lock = lock  # 参照を保持（GC されるとロック解除）
     if not args.tray:
         QTimer.singleShot(50, sn.capture)
     sys.exit(app.exec_())

@@ -49,6 +49,11 @@ def setup_logging():
         pass
 
 
+def _now():
+    import datetime
+    return datetime.datetime.now().strftime("%H:%M")
+
+
 def parse_version(text):
     nums = [int(x) for x in re.findall(r"\d+", text or "")[:3]]
     while len(nums) < 3:
@@ -113,11 +118,19 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def download(url, dest):
+def download(url, dest, progress=None):
     tmp = dest + ".part"
     with _open(url, timeout=60) as r, open(tmp, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        done = 0
+        last = -1
         for chunk in iter(lambda: r.read(1024 * 256), b""):
             f.write(chunk)
+            done += len(chunk)
+            mb = done // (1024 * 1024)
+            if progress and mb != last:
+                last = mb
+                progress(done, total)
     os.replace(tmp, dest)
     return dest
 
@@ -164,6 +177,7 @@ def launch_installer(path):
 
 class UpdateWorker(QThread):
     """バックグラウンドで確認 (+ダウンロード・検証)"""
+    progress = pyqtSignal(str)            # 進行状況（メニューの状態行・通知用）
     no_update = pyqtSignal()
     found = pyqtSignal(object)            # 新版あり（インストール不可 or ダウンロード無効）
     ready = pyqtSignal(object, str)       # 新版あり、検証済みインストーラーのパス
@@ -179,6 +193,7 @@ class UpdateWorker(QThread):
     def run(self):
         try:
             log.info("update check: current=%s repo=%s", self.current, self.repo)
+            self.progress.emit("更新を確認しています…")
             info = fetch_latest(self.repo, self.api_base)
             log.info("latest=%s asset=%s sha=%s", info.version, info.asset_name,
                      (info.sha256 or "")[:12])
@@ -190,7 +205,16 @@ class UpdateWorker(QThread):
                 return
             dest = os.path.join(download_dir(), info.asset_name)
             if not (os.path.exists(dest) and sha256_file(dest) == info.sha256):
-                download(info.asset_url, dest)
+                self.progress.emit("v%s をダウンロードしています…" % info.version)
+
+                def on_progress(done, total):
+                    if total:
+                        self.progress.emit("v%s をダウンロード中 %.1f / %.1f MB" % (
+                            info.version, done / 1048576, total / 1048576))
+                    else:
+                        self.progress.emit("v%s をダウンロード中 %.1f MB" % (info.version, done / 1048576))
+                download(info.asset_url, dest, on_progress)
+            self.progress.emit("v%s を検証しています (SHA-256)…" % info.version)
             actual = sha256_file(dest)
             if actual != info.sha256:
                 os.remove(dest)
@@ -208,7 +232,8 @@ class AutoUpdater(QObject):
     - 常駐時: 起動30秒後と24時間ごとに確認
     - 検証済みインストーラーが用意できたら、キャプチャ中でなければ実行して終了
     """
-    status = pyqtSignal(str, str, bool)   # (title, message, is_warning)
+    status = pyqtSignal(str, str, bool)   # (title, message, is_warning) → トレイ通知
+    state = pyqtSignal(str)               # 現在の状態（トレイメニューの「状態」行）
     quit_requested = pyqtSignal()
 
     def __init__(self, current_version, is_busy, repo=GITHUB_REPO, parent=None):
@@ -220,6 +245,8 @@ class AutoUpdater(QObject):
         self.worker = None
         self.pending = None   # (info, path)
         self.manual = False
+        self._state_text = "待機中"
+        self._last_toast_key = None
         self.last_found = None
         self.timer = QTimer(self)
         self.timer.setInterval(CHECK_INTERVAL_MS)
@@ -249,26 +276,46 @@ class AutoUpdater(QObject):
             return
         self.manual = manual
         self.worker = UpdateWorker(self.current, self.repo, do_download=is_frozen())
+        self.worker.progress.connect(self._on_progress)
         self.worker.no_update.connect(self._on_none)
         self.worker.found.connect(self._on_found)
         self.worker.ready.connect(self._on_ready)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
+    def _set_state(self, text):
+        self._state_text = text
+        self.state.emit(text)
+
+    def _on_progress(self, text):
+        self._set_state(text)
+        # 段階が変わった最初の 1 回だけ通知（ダウンロードの MB 進行は通知しない）
+        key = text.split(" ")[0] + ("DL" if "ダウンロード" in text else "")
+        if getattr(self, "_last_toast_key", None) != key and "ダウンロード中" not in text:
+            self._last_toast_key = key
+            if self.manual or "ダウンロード" in text or "検証" in text:
+                self.status.emit("SnapGo 更新", text, False)
+
     def _on_none(self):
+        self._set_state("最新版です (v%s) ・最終確認 %s" % (self.current, _now()))
+        self._last_toast_key = None
         if self.manual:
             self.status.emit("SnapGo", "最新版です (v%s)" % self.current, False)
 
     def _on_found(self, info):
         self.last_found = info
+        self._set_state("新バージョン v%s あり（手動更新）" % info.version)
         how = "ダウンロードページを開くにはクリック" if not is_frozen() else "インストーラーが見つからないため手動更新してください"
         self.status.emit("SnapGo 新バージョン v%s" % info.version, how, False)
 
     def _on_ready(self, info, path):
         self.pending = (info, path)
+        self._set_state("v%s の検証OK・インストール待ち" % info.version)
         self.try_install()
 
     def _on_failed(self, msg):
+        self._set_state("更新確認に失敗 (%s)" % _now())
+        self._last_toast_key = None
         if self.manual:
             self.status.emit("SnapGo 更新確認に失敗", msg, True)
 
@@ -276,11 +323,13 @@ class AutoUpdater(QObject):
         if not self.pending:
             return
         if self.is_busy():
+            self._set_state("v%s のインストールはキャプチャ終了後に実行" % self.pending[0].version)
             QTimer.singleShot(RETRY_BUSY_MS, self.try_install)
             return
         info, path = self.pending
         self.pending = None
-        self.status.emit("SnapGo", "v%s に更新します。数秒後に再起動します。" % info.version, False)
+        self._set_state("v%s をインストール中… 数秒後に再起動" % info.version)
+        self.status.emit("SnapGo 更新", "v%s をインストールします。数秒後に自動で再起動します。" % info.version, False)
         QTimer.singleShot(3000, lambda: self._run(path))
 
     def _run(self, path):
