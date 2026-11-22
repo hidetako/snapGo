@@ -12,10 +12,12 @@ SnapGo - Windows 画面キャプチャ + その場で書き込み（注釈）ツ
   ツールバー / キー    S:選択移動  P:ペン  H:蛍光  L:直線  A:矢印  R:矩形
                       E:楕円  T:文字  N:番号  M:モザイク
   Ctrl+Z / Ctrl+Y     元に戻す / やり直し
-  Enter または Ctrl+C クリップボードへコピーして閉じる
+  Enter               コピーして閉じる（確認表示 → もう一度 Enter で実行）
+  Ctrl+C              コピーして閉じる（即時）
   Ctrl+S              PNG保存(＋コピー)して閉じる
   Ctrl+Shift+S        保存先を指定して保存
-  Esc / 右クリック    キャンセル
+  Esc                 キャンセル（書き込みがあれば確認）
+  右クリック          メニュー（コピー / 保存 / 選び直し / 元に戻す / 破棄）
   F12                 この画面自体（選択枠・ツールバー込み）を PNG 保存（資料用）
 """
 import sys
@@ -32,11 +34,12 @@ from PyQt5.QtGui import (QPixmap, QPainter, QPen, QColor, QBrush, QFont,
                          QFontMetrics, QRegion)
 import updater
 from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
+                             QMenu,
                              QLineEdit, QFileDialog, QSystemTrayIcon, QMenu,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnapGo"
-__version__ = "1.2.4"
+__version__ = "1.2.5"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -236,6 +239,7 @@ class Toolbar(QFrame):
                         border-radius:4px;padding:4px 7px;font-size:12px;}
             QToolButton:hover{background:#444;}
             QToolButton:checked{background:#0a84ff;color:white;}
+            QToolButton:disabled{color:#666;}
             QToolButton#color{min-width:18px;max-width:18px;min-height:18px;max-height:18px;
                               padding:0;border:2px solid #2b2b2b;border-radius:9px;}
             QToolButton#color:checked{border:2px solid white;}
@@ -282,12 +286,21 @@ class Toolbar(QFrame):
         self.row2.append(self.slider)
 
         self.row3.append(self._sep())
+        self.undo_btn = QToolButton(self)
+        self.undo_btn.setText("↶ 戻る")
+        self.undo_btn.setToolTip("ひとつ前の書き込みを取り消す (Ctrl+Z)")
+        self.undo_btn.clicked.connect(self.ov.undo)
+        self.row3.append(self.undo_btn)
+        self.redo_btn = QToolButton(self)
+        self.redo_btn.setText("進む ↷")
+        self.redo_btn.setToolTip("取り消した書き込みをやり直す (Ctrl+Y)")
+        self.redo_btn.clicked.connect(self.ov.redo_)
+        self.row3.append(self.redo_btn)
+        self.row3.append(self._sep())
         for text, tip, cb in [
-            ("↶", "元に戻す (Ctrl+Z)", self.ov.undo),
-            ("↷", "やり直し (Ctrl+Y)", self.ov.redo_),
             ("コピー", "クリップボードへコピーして閉じる (Enter / Ctrl+C)", lambda: self.ov.finish(copy=True)),
             ("保存", "PNG保存して閉じる (Ctrl+S)", lambda: self.ov.finish(copy=True, save=True)),
-            ("✕", "キャンセル (Esc)", self.ov.cancel),
+            ("✕", "キャンセル (Esc)", self.ov.cancel_requested),
         ]:
             b = QToolButton(self)
             b.setText(text)
@@ -332,7 +345,12 @@ class Toolbar(QFrame):
         f.setStyleSheet("color:#555;")
         return f
 
+    def sync_history(self):
+        self.undo_btn.setEnabled(bool(self.ov.shapes))
+        self.redo_btn.setEnabled(bool(self.ov.redo_stack))
+
     def sync(self):
+        self.sync_history()
         self.tool_btns[self.ov.tool].setChecked(True)
         b = self.color_btns.get(self.ov.color.name())
         if b:
@@ -392,6 +410,7 @@ class Overlay(QWidget):
         self.text_input = None
         self.mouse_pos = QPoint(-1, -1)
         self.flash_text = ""      # 画面下部に一時表示するメッセージ
+        self.confirm = None       # ("copy" | "cancel", 表示文) 確認待ち
 
         self.toolbar = Toolbar(self)
         self.toolbar.sync()
@@ -424,6 +443,7 @@ class Overlay(QWidget):
             self.redo_stack.append(s)
             if s.kind == "number":
                 self.counter = max(1, self.counter - 1)
+            self.toolbar.sync_history()
             self.update()
 
     def redo_(self):
@@ -432,11 +452,13 @@ class Overlay(QWidget):
             self.shapes.append(s)
             if s.kind == "number":
                 self.counter += 1
+            self.toolbar.sync_history()
             self.update()
 
     def add_shape(self, s):
         self.shapes.append(s)
         self.redo_stack.clear()
+        self.toolbar.sync_history()
         self.update()
 
     # ---- テキスト入力 ----
@@ -475,8 +497,11 @@ class Overlay(QWidget):
     # ---- マウス ----
     def mousePressEvent(self, e):
         pos = e.pos()
+        if self.confirm:
+            self.confirm = None
+            self.update()
         if e.button() == Qt.RightButton:
-            self.cancel()
+            self.show_context_menu(e.globalPos())
             return
         if e.button() != Qt.LeftButton:
             return
@@ -574,13 +599,22 @@ class Overlay(QWidget):
         k, m = e.key(), e.modifiers()
         ctrl = bool(m & Qt.ControlModifier)
         shift = bool(m & Qt.ShiftModifier)
+        if self.confirm:
+            kind = self.confirm[0]
+            self.confirm = None
+            self.update()
+            if kind == "copy" and k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Y):
+                self.finish(copy=True)
+            elif kind == "cancel" and k in (Qt.Key_Escape, Qt.Key_Y):
+                self.cancel()
+            return  # それ以外のキーは「戻る」
         if k == Qt.Key_F12:
             self.save_self_capture()
         elif k == Qt.Key_Escape:
-            self.cancel()
+            self.cancel_requested()
         elif k in (Qt.Key_Return, Qt.Key_Enter):
             if self.phase == "edit":
-                self.finish(copy=True)
+                self.ask_confirm("copy", "クリップボードにコピーして閉じますか？   Enter: はい   Esc: 戻る")
         elif ctrl and k == Qt.Key_C and self.phase == "edit":
             self.finish(copy=True)
         elif ctrl and k == Qt.Key_S and self.phase == "edit":
@@ -646,6 +680,20 @@ class Overlay(QWidget):
             p.fillRect(QRect(20, 20, 420, 26), QColor(0, 0, 0, 160))
             p.drawText(QRect(20, 20, 420, 26), Qt.AlignCenter,
                        "ドラッグで範囲選択 / クリックで画面全体 / Esc でキャンセル")
+        if self.confirm:
+            f = QFont()
+            f.setPixelSize(16)
+            f.setBold(True)
+            p.setFont(f)
+            fm = QFontMetrics(f)
+            text = self.confirm[1]
+            tw = fm.horizontalAdvance(text) + 40
+            r = QRect((self.width_px() - tw) // 2, self.height_px() - 110, tw, 44)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(10, 132, 255, 235))
+            p.drawRoundedRect(r, 8, 8)
+            p.setPen(Qt.white)
+            p.drawText(r, Qt.AlignCenter, text)
         if self.flash_text:
             f = QFont()
             f.setPixelSize(14)
@@ -669,6 +717,46 @@ class Overlay(QWidget):
             draw_shape(p, s, self.shot)
         p.end()
         return out
+
+    def ask_confirm(self, kind, text):
+        self.commit_text()
+        self.confirm = (kind, text)
+        self.update()
+
+    def cancel_requested(self):
+        """Esc / ✕: 書き込みがあれば確認してから閉じる"""
+        if self.text_input:
+            self._text_cancel()
+            return
+        if self.shapes or self.cur:
+            self.ask_confirm("cancel", "書き込みを破棄して閉じますか？   Esc: はい   その他のキー: 戻る")
+        else:
+            self.cancel()
+
+    def reselect(self):
+        """範囲を選び直す（書き込みは残る）"""
+        self.commit_text()
+        self.phase = "select"
+        self.toolbar.hide()
+        self.sel = QRect()
+        self.set_tool("select")
+        self.setCursor(Qt.CrossCursor)
+        self.update()
+
+    def show_context_menu(self, global_pos):
+        m = QMenu(self)
+        if self.phase == "edit":
+            m.addAction("コピーして閉じる\tEnter", lambda: self.finish(copy=True))
+            m.addAction("PNG 保存して閉じる\tCtrl+S", lambda: self.finish(copy=True, save=True))
+            m.addAction("名前を付けて保存…\tCtrl+Shift+S", lambda: self.finish(copy=True, save=True, ask_path=True))
+            m.addSeparator()
+            m.addAction("範囲を選び直す", self.reselect)
+            a = m.addAction("元に戻す\tCtrl+Z", self.undo)
+            a.setEnabled(bool(self.shapes))
+            m.addSeparator()
+        m.addAction("書き込みを破棄して閉じる\tEsc", self.cancel if not self.shapes else
+                    lambda: self.ask_confirm("cancel", "書き込みを破棄して閉じますか？   Esc: はい   その他のキー: 戻る"))
+        m.exec_(global_pos)
 
     def flash(self, text, msec=2500):
         self.flash_text = text
