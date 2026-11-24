@@ -39,7 +39,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QToolButton, QHBoxLayout,
                              QAction, QSlider, QFrame, QButtonGroup, QLabel, QGridLayout)
 
 APP_NAME = "SnapGo"
-__version__ = "1.2.5"
+__version__ = "1.2.6"
 DEFAULT_HOTKEY = "printscreen"
 
 TOOLS = [  # (id, ラベル, ツールチップ, キー)
@@ -871,27 +871,56 @@ class Hotkey:
     """
     グローバルホットキー。
     1) RegisterHotKey を試す
-    2) 失敗（Snipping Tool 等が PrtSc を先取りしている）なら
+    2) 失敗（Snipping Tool や旧 SnipNote が PrtSc を先取りしている）なら
        低レベルキーボードフック (WH_KEYBOARD_LL) で同じキーを横取りする
+    3) どちらも失敗したら 10 秒ごとに再試行する（旧アプリが終了すれば取れる）
     """
+    RETRY_MS = 10 * 1000
 
-    def __init__(self, app, hotkey_text, callback):
+    def __init__(self, app, hotkey_text, callback, on_change=None):
         import ctypes
         import ctypes.wintypes as wt
         self.app = app
         self.callback = callback
+        self.on_change = on_change
         self.mods, self.vk = parse_hotkey(hotkey_text)
         self.method = None
         self.hook = None
         self.user32 = ctypes.windll.user32
+        self.kernel32 = ctypes.windll.kernel32
         self.ctypes, self.wt = ctypes, wt
-
         self.filter = HotkeyFilter(callback)
         app.installNativeEventFilter(self.filter)
+        self.timer = QTimer()
+        self.timer.setInterval(self.RETRY_MS)
+        self.timer.timeout.connect(self._retry)
+        self.acquire()
+
+    def acquire(self):
         if self.user32.RegisterHotKey(None, 1, self.mods, self.vk):
-            self.method = "RegisterHotKey"
-            return
-        self._install_hook()
+            self._set_method("RegisterHotKey")
+            return True
+        err = self.kernel32.GetLastError()
+        updater.log.info("RegisterHotKey failed (err=%s); trying keyboard hook", err)
+        try:
+            self._install_hook()
+            self._set_method("KeyboardHook")
+            return True
+        except Exception as ex:
+            updater.log.warning("keyboard hook failed: %s", ex)
+            self._set_method(None)
+            self.timer.start()
+            return False
+
+    def _retry(self):
+        if self.method is None and self.acquire():
+            self.timer.stop()
+
+    def _set_method(self, method):
+        self.method = method
+        updater.log.info("hotkey method: %s", method or "none (retrying)")
+        if self.on_change:
+            self.on_change(method)
 
     def _install_hook(self):
         ctypes, wt = self.ctypes, self.wt
@@ -912,6 +941,8 @@ class Hotkey:
         u.UnhookWindowsHookEx.argtypes = [wt.HHOOK]
         u.GetAsyncKeyState.argtypes = [ctypes.c_int]
         u.GetAsyncKeyState.restype = ctypes.c_short
+        self.kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
+        self.kernel32.GetModuleHandleW.restype = wt.HMODULE
 
         need_ctrl = bool(self.mods & 0x0002)
         need_alt = bool(self.mods & 0x0001)
@@ -922,24 +953,28 @@ class Hotkey:
             return bool(u.GetAsyncKeyState(vk) & 0x8000)
 
         def proc(n_code, w_param, l_param):
-            if n_code == 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                if kb.vkCode == self.vk:
-                    if (down(0x11) == need_ctrl and down(0x12) == need_alt and
-                            down(0x10) == need_shift and
-                            (down(0x5B) or down(0x5C)) == need_win):
-                        updater.log.info("hook: hotkey pressed")
-                        QTimer.singleShot(0, self.callback)
-                        return 1  # 他アプリ(OneDrive等)へ渡さない
+            try:
+                if n_code == 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    if kb.vkCode == self.vk:
+                        if (down(0x11) == need_ctrl and down(0x12) == need_alt and
+                                down(0x10) == need_shift and
+                                (down(0x5B) or down(0x5C)) == need_win):
+                            updater.log.info("hook: hotkey pressed")
+                            QTimer.singleShot(0, self.callback)
+                            return 1  # 他アプリ(OneDrive等)へ渡さない
+            except Exception as ex:  # フック内で例外を漏らさない
+                updater.log.warning("hook error: %s", ex)
             return u.CallNextHookEx(self.hook, n_code, w_param, l_param)
 
         self._proc = HOOKPROC(proc)  # GC されないよう保持
-        self.hook = u.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, None, 0)
+        hmod = self.kernel32.GetModuleHandleW(None)
+        self.hook = u.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, hmod, 0)
         if not self.hook:
-            raise OSError("ホットキーを登録できません（RegisterHotKey もフックも失敗）")
-        self.method = "KeyboardHook"
+            raise OSError("SetWindowsHookEx failed (err=%s)" % self.kernel32.GetLastError())
 
     def release(self):
+        self.timer.stop()
         if self.method == "RegisterHotKey":
             self.user32.UnregisterHotKey(None, 1)
         elif self.hook:
@@ -947,15 +982,43 @@ class Hotkey:
             self.hook = None
 
 
-def windows_prtsc_snipping_enabled():
-    """Windows の「PrintScreen で Snipping Tool を開く」設定が ON か"""
+def kill_legacy_processes():
+    """旧名 SnipNote の常駐を終了させる（PrintScreen を握ったままになるため）"""
+    if sys.platform != "win32":
+        return
+    import subprocess
+    for image in ("SnipNote.exe",):
+        try:
+            r = subprocess.run(["taskkill", "/F", "/IM", image], capture_output=True,
+                               creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
+            if r.returncode == 0:
+                updater.log.info("terminated legacy process %s", image)
+        except Exception as ex:
+            updater.log.warning("taskkill %s failed: %s", image, ex)
+
+
+def windows_prtsc_snipping_state():
+    """
+    Windows の「PrintScreen キーで Snipping Tool を開く」設定。
+    戻り値: "on" / "off" / "unset"（Windows 11 では未設定 = ON 扱い）/ None（取得不可）
+    """
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Keyboard") as k:
-            val, _ = winreg.QueryValueEx(k, "PrintScreenKeyForSnippingEnabled")
-            return int(val) == 1
+            try:
+                val, _ = winreg.QueryValueEx(k, "PrintScreenKeyForSnippingEnabled")
+                return "on" if int(val) == 1 else "off"
+            except FileNotFoundError:
+                return "unset"
     except Exception:
-        return False
+        return None
+
+
+def windows_prtsc_snipping_disable():
+    """設定を OFF にする（HKCU なので管理者権限不要。反映にはサインインし直しが必要）"""
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Keyboard") as k:
+        winreg.SetValueEx(k, "PrintScreenKeyForSnippingEnabled", 0, winreg.REG_DWORD, 0)
 
 
 # ----------------------------------------------------------------------------
@@ -991,6 +1054,23 @@ class SnapGo:
             if auto_update:
                 self.updater.start()
 
+    def _fix_prtsc_setting(self):
+        try:
+            windows_prtsc_snipping_disable()
+            updater.log.info("set PrintScreenKeyForSnippingEnabled=0")
+            self._notify(APP_NAME, "Windows の設定を変更しました。サインアウトしてサインインし直すと PrintScreen が SnapGo で使えます。", False)
+        except Exception as ex:
+            updater.log.warning("failed to set PrtSc setting: %s", ex)
+            self._notify(APP_NAME, "設定を変更できませんでした: %s\n設定 > アクセシビリティ > キーボード で OFF にしてください。" % ex, True)
+
+    def _on_hotkey_method(self, method):
+        if not self.tray:
+            return
+        label = {"RegisterHotKey": "待受中", "KeyboardHook": "待受中 (フック)", None: "登録失敗・再試行中"}[method]
+        self.tray.setToolTip("%s - %s %s" % (APP_NAME, self.hotkey.upper(), label))
+        if hasattr(self, "hotkey_action"):
+            self.hotkey_action.setText("%s: %s" % (self.hotkey.upper(), label))
+
     def _notify(self, title, msg, warning):
         if self.tray:
             self.tray.showMessage(title, msg,
@@ -1012,6 +1092,13 @@ class SnapGo:
         v = QAction("バージョン %s%s" % (__version__, "" if updater.is_frozen() else " (ソース実行)"), menu)
         v.setEnabled(False)
         menu.addAction(v)
+        self.hotkey_action = QAction("%s: 未登録" % self.hotkey.upper(), menu)
+        self.hotkey_action.setEnabled(False)
+        menu.addAction(self.hotkey_action)
+        if sys.platform == "win32" and self.hotkey == "printscreen":
+            fx = QAction("PrintScreen を SnapGo に割り当てる（Windows 設定を変更）", menu)
+            fx.triggered.connect(self._fix_prtsc_setting)
+            menu.addAction(fx)
         self.state_action = QAction("状態: 待機中", menu)
         self.state_action.setEnabled(False)
         menu.addAction(self.state_action)
@@ -1035,20 +1122,23 @@ class SnapGo:
         self.tray.activated.connect(lambda r: self.capture() if r == QSystemTrayIcon.Trigger else None)
         self.tray.show()
         if sys.platform == "win32":
-            try:
-                self.hk = Hotkey(self.app, self.hotkey, self.capture)
-                self.app.aboutToQuit.connect(self.hk.release)
-                self.tray.setToolTip("%s - %s でキャプチャ (%s)" % (APP_NAME, self.hotkey.upper(), self.hk.method))
-                updater.log.info("hotkey %s via %s", self.hotkey, self.hk.method)
-            except Exception as ex:
-                updater.log.warning("hotkey failed: %s", ex)
-                self.tray.showMessage(APP_NAME, str(ex), QSystemTrayIcon.Warning, 8000)
-            if self.hotkey == "printscreen" and windows_prtsc_snipping_enabled():
+            kill_legacy_processes()
+            self.hk = Hotkey(self.app, self.hotkey, self.capture, on_change=self._on_hotkey_method)
+            self.app.aboutToQuit.connect(self.hk.release)
+            if self.hk.method is None:
                 self.tray.showMessage(
                     APP_NAME,
-                    "Windows の「PrintScreen キーで画面キャプチャを開く」が ON です。\n"
-                    "Snipping Tool と競合する場合は 設定 > アクセシビリティ > キーボード で OFF にしてください。",
-                    QSystemTrayIcon.Warning, 10000)
+                    "%s を登録できませんでした。他のアプリが使用中の可能性があります。10 秒ごとに再試行します。"
+                    % self.hotkey.upper(), QSystemTrayIcon.Warning, 8000)
+            if self.hotkey == "printscreen":
+                state = windows_prtsc_snipping_state()
+                updater.log.info("windows PrtSc->SnippingTool setting: %s", state)
+                if state in ("on", "unset"):
+                    self.tray.showMessage(
+                        APP_NAME,
+                        "Windows が PrintScreen を Snipping Tool に割り当てています。\n"
+                        "トレイメニューの「PrintScreen を SnapGo に割り当てる」を実行し、サインインし直してください。",
+                        QSystemTrayIcon.Warning, 15000)
 
     def capture(self):
         if self.overlay is not None:

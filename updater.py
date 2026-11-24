@@ -84,6 +84,47 @@ def _open(url, timeout=15):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def _is_ssl_error(ex):
+    import ssl
+    return isinstance(ex, ssl.SSLError) or isinstance(getattr(ex, "reason", None), ssl.SSLError)
+
+
+def _curl_path():
+    """Windows 10 1803 以降に同梱の curl.exe（Windows の証明書ストアで検証する）"""
+    if sys.platform != "win32":
+        return None
+    p = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "curl.exe")
+    return p if os.path.exists(p) else None
+
+
+def _curl_fetch(url, dest=None, timeout=60):
+    """curl.exe でダウンロード。dest=None なら bytes を返す"""
+    curl = _curl_path()
+    if not curl:
+        raise RuntimeError("curl.exe が見つかりません")
+    args = [curl, "-sSL", "--fail", "--max-time", str(timeout), "-A", USER_AGENT,
+            "-H", "Accept: application/vnd.github+json, */*", url]
+    if dest:
+        args += ["-o", dest]
+    r = subprocess.run(args, capture_output=True, timeout=timeout + 10,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        raise RuntimeError("curl failed (%s): %s" % (r.returncode, r.stderr.decode("utf-8", "replace").strip()[:200]))
+    return None if dest else r.stdout
+
+
+def _read_url(url, timeout=15):
+    """URL の内容を bytes で返す。SSL 検証に失敗したら curl.exe (Windows 証明書ストア) で再試行"""
+    try:
+        with _open(url, timeout=timeout) as r:
+            return r.read()
+    except Exception as ex:
+        if _is_ssl_error(ex) and _curl_path():
+            log.warning("urllib SSL error (%s); retrying with curl.exe", ex)
+            return _curl_fetch(url, timeout=timeout)
+        raise
+
+
 def parse_sums(text, name):
     for line in text.splitlines():
         parts = line.strip().split()
@@ -94,8 +135,7 @@ def parse_sums(text, name):
 
 def fetch_latest(repo=GITHUB_REPO, api_base=None):
     url = api_base if api_base else API_LATEST % repo
-    with _open(url) as r:
-        data = json.loads(r.read().decode("utf-8"))
+    data = json.loads(_read_url(url).decode("utf-8"))
     tag = data.get("tag_name") or data.get("name") or ""
     assets = data.get("assets") or []
     setup = next((a for a in assets if ASSET_RE.match(a.get("name", ""))), None)
@@ -105,8 +145,8 @@ def fetch_latest(repo=GITHUB_REPO, api_base=None):
         info.asset_name = setup["name"]
         info.asset_url = setup["browser_download_url"]
         if sums:
-            with _open(sums["browser_download_url"]) as r:
-                info.sha256 = parse_sums(r.read().decode("utf-8", "replace"), setup["name"])
+            info.sha256 = parse_sums(_read_url(sums["browser_download_url"]).decode("utf-8", "replace"),
+                                     setup["name"])
     return info
 
 
@@ -120,6 +160,21 @@ def sha256_file(path):
 
 def download(url, dest, progress=None):
     tmp = dest + ".part"
+    try:
+        _download_urllib(url, tmp, progress)
+    except Exception as ex:
+        if _is_ssl_error(ex) and _curl_path():
+            log.warning("download SSL error (%s); retrying with curl.exe", ex)
+            if progress:
+                progress(0, 0)
+            _curl_fetch(url, dest=tmp, timeout=600)
+        else:
+            raise
+    os.replace(tmp, dest)
+    return dest
+
+
+def _download_urllib(url, tmp, progress=None):
     with _open(url, timeout=60) as r, open(tmp, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
@@ -131,8 +186,6 @@ def download(url, dest, progress=None):
             if progress and mb != last:
                 last = mb
                 progress(done, total)
-    os.replace(tmp, dest)
-    return dest
 
 
 def download_dir():
